@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -o pipefail
+
 # config
 default_semvar_bump=${DEFAULT_BUMP:-minor}
 with_v=${WITH_V:-false}
@@ -7,14 +9,18 @@ release_branches=${RELEASE_BRANCHES:-master}
 custom_tag=${CUSTOM_TAG}
 source=${SOURCE:-.}
 dryrun=${DRY_RUN:-false}
+initial_version=${INITIAL_VERSION:-0.0.0}
+tag_context=${TAG_CONTEXT:-repo}
 
 cd ${GITHUB_WORKSPACE}/${source}
+
+current_branch=$(git rev-parse --abbrev-ref HEAD)
 
 pre_release="true"
 IFS=',' read -ra branch <<< "$release_branches"
 for b in "${branch[@]}"; do
-    echo "Is $b a match for ${GITHUB_REF#'refs/heads/'}"
-    if [[ "${GITHUB_REF#'refs/heads/'}" =~ $b ]]
+    echo "Is $b a match for ${current_branch}"
+    if [[ "${current_branch}" =~ $b ]]
     then
         pre_release="false"
     fi
@@ -25,10 +31,25 @@ echo "pre_release = $pre_release"
 git fetch --tags
 
 # get latest tag that looks like a semver (with or without v)
-tag=$(git for-each-ref --sort=-v:refname --count=1 --format '%(refname)' refs/tags/[0-9]*.[0-9]*.[0-9]* refs/tags/v[0-9]*.[0-9]*.[0-9]* | cut -d / -f 3-)
-tag_commit=$(git rev-list -n 1 $tag)
+case "$tag_context" in
+    *repo*) tag=$(git for-each-ref --sort=-v:refname --format '%(refname)' | cut -d / -f 3- | grep -E '^v?[0-9]+.[0-9]+.[0-9]+$' | head -n1);;
+    *branch*) tag=$(git tag --list --merged HEAD --sort=-committerdate | grep -E '^v?[0-9]+.[0-9]+.[0-9]+$' | head -n1);;
+    * ) echo "Unrecognised context"; exit 1;;
+esac
+
+# if there are none, start tags at INITIAL_VERSION which defaults to 0.0.0
+if [ -z "$tag" ]
+then
+    log=$(git log --pretty='%B')
+    tag="$initial_version"
+else
+    log=$(git log $tag..HEAD --pretty='%B')
+fi
 
 # get current commit hash for tag
+tag_commit=$(git rev-list -n 1 $tag)
+
+# get current commit hash
 commit=$(git rev-parse HEAD)
 
 if [ "$tag_commit" == "$commit" ]; then
@@ -37,25 +58,29 @@ if [ "$tag_commit" == "$commit" ]; then
     exit 0
 fi
 
-# if there are none, start tags at 0.0.0
-if [ -z "$tag" ]
-then
-    log=$(git log --pretty='%B')
-    tag=0.0.0
-else
-    log=$(git log $tag..HEAD --pretty='%B')
-fi
-
 echo $log
+
+# this will bump the semvar using the default bump level,
+# or it will simply pass if the default was "none"
+function default-bump {
+  if [ "$default_semvar_bump" == "none" ]; then
+    echo "Default bump was set to none. Skipping..."
+    exit 0
+  else
+    semver bump "${default_semvar_bump}" $tag
+  fi
+}
 
 # get commit logs and determine home to bump the version
 # supports #major, #minor, #patch (anything else will be 'minor')
 case "$log" in
-    *#major* ) new=$(semver bump major $tag);;
-    *#minor* ) new=$(semver bump minor $tag);;
-    *#patch* ) new=$(semver bump patch $tag);;
-    * ) new=$(semver bump `echo $default_semvar_bump` $tag);;
+    *#major* ) new=$(semver bump major $tag); part="major";;
+    *#minor* ) new=$(semver bump minor $tag); part="minor";;
+    *#patch* ) new=$(semver bump patch $tag); part="patch";;
+    * ) new=$(default-bump); part=$default_semvar_bump;;
 esac
+
+echo $part
 
 # did we get a new tag?
 if [ ! -z "$new" ]
@@ -81,6 +106,7 @@ echo $new
 
 # set outputs
 echo ::set-output name=new_tag::$new
+echo ::set-output name=part::$part
 
 # use dry run to determine the next tag
 if $dryrun
@@ -98,6 +124,9 @@ then
     exit 0
 fi
 
+# create local git tag
+git tag $new
+
 # push new tag ref to github
 dt=$(date '+%Y-%m-%dT%H:%M:%SZ')
 full_name=$GITHUB_REPOSITORY
@@ -105,6 +134,7 @@ git_refs_url=$(jq .repository.git_refs_url $GITHUB_EVENT_PATH | tr -d '"' | sed 
 
 echo "$dt: **pushing tag $new to repo $full_name"
 
+git_refs_response=$(
 curl -s -X POST $git_refs_url \
 -H "Authorization: token $GITHUB_TOKEN" \
 -d @- << EOF
@@ -114,3 +144,14 @@ curl -s -X POST $git_refs_url \
   "sha": "$commit"
 }
 EOF
+)
+
+git_ref_posted=$( echo "${git_refs_response}" | jq .ref | tr -d '"' )
+
+echo "::debug::${git_refs_response}"
+if [ "${git_ref_posted}" = "refs/tags/${new}" ]; then
+  exit 0
+else
+  echo "::error::Tag was not created properly."
+  exit 1
+fi
