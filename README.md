@@ -47,6 +47,7 @@ _NOTE: set the fetch-depth for `actions/checkout@master` to be sure you retrieve
 * **DRY_RUN** *(optional)* - Determine the next version without tagging the branch. The workflow can use the outputs `new_tag` and `tag` in subsequent steps. Possible values are ```true``` and ```false``` (default).
 * **INITIAL_VERSION** *(optional)* - Set initial version before bump. Default `0.0.0`.
 * **TAG_CONTEXT** *(optional)* - Set the context of the previous tag. Possible values are `repo` (default) or `branch`.
+* **START_MAJOR_VERSION** *(optional)* - Determine the base major version when increasing the version. Possible values are `0`, `1`, `2`, and so on.
 
 #### Outputs
 
