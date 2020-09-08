@@ -11,6 +11,7 @@ source=${SOURCE:-.}
 dryrun=${DRY_RUN:-false}
 initial_version=${INITIAL_VERSION:-0.0.0}
 tag_context=${TAG_CONTEXT:-repo}
+start_major_version=${START_MAJOR_VERSION}
 
 cd ${GITHUB_WORKSPACE}/${source}
 
@@ -31,11 +32,20 @@ echo "pre_release = $pre_release"
 git fetch --tags
 
 # get latest tag that looks like a semver (with or without v)
-case "$tag_context" in
-    *repo*) tag=$(git for-each-ref --sort=-v:refname --format '%(refname)' | cut -d / -f 3- | grep -E '^v?[0-9]+.[0-9]+.[0-9]+$' | head -n1);;
-    *branch*) tag=$(git tag --list --merged HEAD --sort=-committerdate | grep -E '^v?[0-9]+.[0-9]+.[0-9]+$' | head -n1);;
-    * ) echo "Unrecognised context"; exit 1;;
-esac
+if [ -z "$start_major_version"]
+then
+    case "$tag_context" in
+        *repo*) tag=$(git for-each-ref --sort=-v:refname --format '%(refname)' | cut -d / -f 3- | grep -E '^v?[0-9]+.[0-9]+.[0-9]+$' | head -n1);;
+        *branch*) tag=$(git tag --list --merged HEAD --sort=-committerdate | grep -E '^v?[0-9]+.[0-9]+.[0-9]+$' | head -n1);;
+        * ) echo "Unrecognised context"; exit 1;;
+    esac
+else
+    case "$tag_context" in
+        *repo*) tag=$(git for-each-ref --sort=-v:refname --format '%(refname)' | cut -d / -f 3- | grep -E '^v?'$start_major_version'.[0-9]+.[0-9]+$' | head -n1);;
+        *branch*) tag=$(git tag --list --merged HEAD --sort=-committerdate | grep -E '^v?'$start_major_version'.[0-9]+.[0-9]+$' | head -n1);;
+        * ) echo "Unrecognised context"; exit 1;;
+    esac
+fi
 
 # if there are none, start tags at INITIAL_VERSION which defaults to 0.0.0
 if [ -z "$tag" ]
@@ -113,7 +123,7 @@ if $dryrun
 then
     echo ::set-output name=tag::$tag
     exit 0
-fi 
+fi
 
 echo ::set-output name=tag::$new
 
